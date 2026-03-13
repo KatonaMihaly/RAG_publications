@@ -8,18 +8,45 @@ Credentials are read automatically from ~/.databrickscfg.
 
 import os
 import time
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = lambda: None  # noqa: E731
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementState
 
 load_dotenv()
 
-PARSED_PAPERS_TPATH  = os.environ["PARSED_PAPERS_TPATH"]
-CHUNKED_PAPERS_TPATH  = os.environ["CHUNKED_PAPERS_TPATH"]
-MIN_CHUNK_SIZE = os.environ["MIN_CHUNK_SIZE"]
 
-sql_command_chunk = f"""
-CREATE OR REPLACE TABLE {CHUNKED_PAPERS_TPATH} AS
+def _param(key: str) -> str:
+    """Read from Databricks job parameter (widget) on Databricks, or env var locally."""
+    try:
+        return dbutils.widgets.get(key)  # noqa: F821
+    except NameError:
+        return os.environ[key]
+
+
+PARSED_PAPERS_TPATH  = _param("PARSED_PAPERS_TPATH")
+CHUNKED_PAPERS_TPATH = _param("CHUNKED_PAPERS_TPATH")
+MIN_CHUNK_SIZE       = _param("MIN_CHUNK_SIZE")
+
+sql_create_table = f"""
+CREATE TABLE IF NOT EXISTS {CHUNKED_PAPERS_TPATH} (
+    path       STRING,
+    chunk_id   STRING,
+    chunk_text STRING,
+    chunk_type STRING
+) USING DELTA
+TBLPROPERTIES (delta.enableChangeDataFeed = true)
+"""
+
+sql_delete_removed = f"""
+DELETE FROM {CHUNKED_PAPERS_TPATH}
+WHERE path NOT IN (SELECT DISTINCT path FROM {PARSED_PAPERS_TPATH})
+"""
+
+sql_insert_new = f"""
+INSERT INTO {CHUNKED_PAPERS_TPATH}
 SELECT
     path,
     uuid()                          AS chunk_id,
@@ -29,11 +56,7 @@ FROM {PARSED_PAPERS_TPATH},
 LATERAL VARIANT_EXPLODE(parsed_output:document.elements) AS exploded(pos, key, value)
 WHERE exploded.value:content IS NOT NULL
   AND length(exploded.value:content::string) > {MIN_CHUNK_SIZE}
-"""
-
-sql_command_enableChangeDataFeed = f"""
-ALTER TABLE {CHUNKED_PAPERS_TPATH}
-SET TBLPROPERTIES (delta.enableChangeDataFeed = true)
+  AND path NOT IN (SELECT DISTINCT path FROM {CHUNKED_PAPERS_TPATH})
 """
 
 
@@ -73,12 +96,14 @@ def chunk_publications() -> None:
     warehouse_id = _get_warehouse_id(w)
     print(f"Using warehouse {warehouse_id}")
 
-    print(f"Step 1/2: Chunking '{PARSED_PAPERS_TPATH}' → '{CHUNKED_PAPERS_TPATH}'...")
-    _run_sql(w, warehouse_id, sql_command_chunk, "Chunking")
+    print(f"Step 1/3: Ensuring table '{CHUNKED_PAPERS_TPATH}' exists (CDF enabled)...")
+    _run_sql(w, warehouse_id, sql_create_table, "Create table")
 
-    print(f"Step 2/2: Enabling Change Data Feed on '{CHUNKED_PAPERS_TPATH}'...")
-    _run_sql(w, warehouse_id, sql_command_enableChangeDataFeed, "CDF")
+    print(f"Step 2/3: Removing chunks for deleted PDFs...")
+    _run_sql(w, warehouse_id, sql_delete_removed, "Delete removed")
 
+    print(f"Step 3/3: Inserting chunks for new paths from '{PARSED_PAPERS_TPATH}'...")
+    _run_sql(w, warehouse_id, sql_insert_new, "Insert new")
     print(f"Done. '{CHUNKED_PAPERS_TPATH}' is ready for vector indexing.")
 
 

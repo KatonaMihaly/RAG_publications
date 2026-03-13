@@ -2,21 +2,40 @@
 Gold layer: create a Mosaic AI Vector Search endpoint and Delta Sync index
             over the chunked papers silver table.
 
+On subsequent runs (index already exists) the function triggers a sync instead
+of re-creating, so this script is safe to call from a scheduled nightly job.
+
 Credentials are read automatically from ~/.databrickscfg.
 """
 
 import os
-from dotenv import load_dotenv
+import time
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = lambda: None  # noqa: E731
 from databricks.vector_search.client import VectorSearchClient
 
 load_dotenv()
 
-SOURCE_TABLE      = os.environ["CHUNKED_PAPERS_TPATH"]
-ENDPOINT_NAME     = os.environ["VECTOR_SEARCH_ENDPOINT"]
-INDEX_NAME        = os.environ["VECTOR_SEARCH_INDEX"]
-EMBEDDING_MODEL   = os.environ["EMBEDDING_MODEL"]
-EMBEDDING_COLUMN  = os.environ["EMBEDDING_COLUMN"]
-PRIMARY_KEY       = os.environ["PRIMARY_KEY"]
+
+def _param(key: str) -> str:
+    """Read from Databricks job parameter (widget) on Databricks, or env var locally."""
+    try:
+        return dbutils.widgets.get(key)  # noqa: F821
+    except NameError:
+        return os.environ[key]
+
+
+SOURCE_TABLE      = _param("CHUNKED_PAPERS_TPATH")
+ENDPOINT_NAME     = _param("VECTOR_SEARCH_ENDPOINT")
+INDEX_NAME        = _param("VECTOR_SEARCH_INDEX")
+EMBEDDING_MODEL   = _param("EMBEDDING_MODEL")
+EMBEDDING_COLUMN  = _param("EMBEDDING_COLUMN")
+PRIMARY_KEY       = _param("PRIMARY_KEY")
+
+# Maximum minutes to wait for index creation or sync to complete
+INDEX_TIMEOUT_MIN = 30
 
 
 def get_or_create_endpoint(client: VectorSearchClient, endpoint_name: str) -> None:
@@ -29,22 +48,46 @@ def get_or_create_endpoint(client: VectorSearchClient, endpoint_name: str) -> No
     print(f"  Endpoint '{endpoint_name}' ready.")
 
 
+def _wait_for_index(client: VectorSearchClient) -> None:
+    """Poll until the index reaches ONLINE_NO_PENDING_UPDATE."""
+    deadline = time.time() + INDEX_TIMEOUT_MIN * 60
+    while time.time() < deadline:
+        status = client.get_index(ENDPOINT_NAME, INDEX_NAME).describe()
+        state = status.get("status", {}).get("detailed_state", "UNKNOWN")
+        print(f"  Index state: {state}")
+        if state in ("ONLINE_NO_PENDING_UPDATE", "ONLINE"):
+            print("  Index is ready.")
+            return
+        time.sleep(20)
+    raise TimeoutError(f"Index did not become ready within {INDEX_TIMEOUT_MIN} minutes.")
+
+
 def create_vector_index() -> None:
     client = VectorSearchClient()
 
     print(f"Step 1/2: Ensuring endpoint '{ENDPOINT_NAME}' exists...")
     get_or_create_endpoint(client, ENDPOINT_NAME)
 
-    print(f"Step 2/2: Creating index '{INDEX_NAME}' (this may take several minutes)...")
-    client.create_delta_sync_index_and_wait(
-        endpoint_name=ENDPOINT_NAME,
-        index_name=INDEX_NAME,
-        source_table_name=SOURCE_TABLE,
-        primary_key=PRIMARY_KEY,
-        pipeline_type="TRIGGERED",
-        embedding_source_column=EMBEDDING_COLUMN,
-        embedding_model_endpoint_name=EMBEDDING_MODEL,
-    )
+    existing_indexes = [
+        i["name"] for i in client.list_indexes(ENDPOINT_NAME).get("vector_indexes", [])
+    ]
+
+    if INDEX_NAME in existing_indexes:
+        print(f"Step 2/2: Index '{INDEX_NAME}' already exists — triggering sync...")
+        client.get_index(ENDPOINT_NAME, INDEX_NAME).sync()
+    else:
+        print(f"Step 2/2: Creating index '{INDEX_NAME}' (this may take several minutes)...")
+        client.create_delta_sync_index_and_wait(
+            endpoint_name=ENDPOINT_NAME,
+            index_name=INDEX_NAME,
+            source_table_name=SOURCE_TABLE,
+            primary_key=PRIMARY_KEY,
+            pipeline_type="TRIGGERED",
+            embedding_source_column=EMBEDDING_COLUMN,
+            embedding_model_endpoint_name=EMBEDDING_MODEL,
+        )
+
+    _wait_for_index(client)
     print(f"Done. Index '{INDEX_NAME}' is ready for querying.")
 
 

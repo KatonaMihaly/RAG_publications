@@ -1,0 +1,1 @@
+Ask technical questions that require specific numerical values or design parameters from the documents. Ask questions about the research aims and conclusions. Include at least one unanswerable question (not covered by the provided documents) so the assistant learns to say it does not know. Do not ask questions that are too broad or subjective.
