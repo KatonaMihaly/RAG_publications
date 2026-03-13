@@ -12,6 +12,7 @@ Run with:
 Credentials are read from ~/.databrickscfg. Configuration from .env.
 """
 
+import base64
 import json
 import os
 import time
@@ -46,15 +47,15 @@ VECTOR_SEARCH_INDEX    = _param("VECTOR_SEARCH_INDEX")
 LLM_ENDPOINT           = _param("LLM_ENDPOINT")
 NUM_RESULTS            = int(_param("NUM_RESULTS"))
 
-# Load prompts from local files when running locally; fall back to env vars
-# injected by deploy_job.py when running as a Databricks notebook task.
-_PROMPTS_DIR = Path(__file__).parent / "prompts"
+# Load prompts from local files when running locally; fall back to job
+# parameters injected by deploy_job.py when running on Databricks.
 try:
+    _PROMPTS_DIR      = Path(__file__).parent / "prompts"
     SYSTEM_PROMPT     = (_PROMPTS_DIR / "research_assistant_system_prompt.md").read_text().strip()
     FEW_SHOT_EXAMPLES = json.loads((_PROMPTS_DIR / "few_shot_examples.json").read_text())
-except FileNotFoundError:
+except (NameError, FileNotFoundError):
     SYSTEM_PROMPT     = _param("SYSTEM_PROMPT")
-    FEW_SHOT_EXAMPLES = json.loads(_param("FEW_SHOT_EXAMPLES"))
+    FEW_SHOT_EXAMPLES = json.loads(base64.b64decode(_param("FEW_SHOT_EXAMPLES")).decode())
 
 # Lazy-initialised once on the first call to predict()
 _index  = None
@@ -104,8 +105,8 @@ def load_eval_data(w: WorkspaceClient, warehouse_id: str) -> pd.DataFrame:
     records = []
     for inputs_json, expectations_json in rows:
         records.append({
-            "inputs":       json.loads(inputs_json),
-            "expectations": json.loads(expectations_json) if expectations_json else {},
+            "inputs":       json.loads(inputs_json, strict=False),
+            "expectations": json.loads(expectations_json, strict=False) if expectations_json else {},
         })
 
     df = pd.DataFrame(records)

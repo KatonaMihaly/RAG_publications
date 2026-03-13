@@ -21,6 +21,7 @@ Prerequisites
 """
 
 import base64
+import json
 import sys
 from pathlib import Path
 
@@ -61,12 +62,20 @@ def _load_config() -> dict:
 def _extra_params(task_key: str) -> dict:
     """
     Task-specific parameters that cannot be stored in job.yml because they
-    contain multi-line content (prompt files).  Only evaluate_rag needs these.
+    contain multi-line content (prompt files).
     """
     if task_key == "evaluate_rag":
+        few_shot_b64 = base64.b64encode(
+            json.dumps(json.loads((PROMPTS_DIR / "few_shot_examples.json").read_text())).encode()
+        ).decode()
         return {
             "SYSTEM_PROMPT":     (PROMPTS_DIR / "research_assistant_system_prompt.md").read_text().strip(),
-            "FEW_SHOT_EXAMPLES": (PROMPTS_DIR / "few_shot_examples.json").read_text().strip(),
+            "FEW_SHOT_EXAMPLES": few_shot_b64,
+        }
+    if task_key == "generate_truth_table":
+        return {
+            "AGENT_DESCRIPTION":   (PROMPTS_DIR / "agent_description.md").read_text().strip(),
+            "QUESTION_GUIDELINES": (PROMPTS_DIR / "question_guidelines.md").read_text().strip(),
         }
     return {}
 

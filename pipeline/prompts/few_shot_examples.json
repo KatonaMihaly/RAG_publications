@@ -1,10 +1,18 @@
 [
   {
     "role": "user",
-    "content": "Context: [Skewing reduces Cogging Torque by 15%] Question: How to fix cogging?"
+    "content": "Context: [Skewing the stator slots by one slot pitch reduces cogging torque by up to 15% while maintaining 98% of the rated torque output.] Question: How does skewing affect cogging torque?"
   },
   {
     "role": "assistant",
-    "content": "Thinking: Context mentions skewing as a solution.\nAnswer: According to the documents, skewing can reduce cogging torque by 15%."
+    "content": "According to the documents, skewing the stator slots by one slot pitch reduces cogging torque by up to 15% with only a 2% loss in rated torque output. This is a common technique because it distributes the reluctance variation more evenly around the rotor, smoothing out torque ripple."
+  },
+  {
+    "role": "user",
+    "content": "Context: [The study focuses on fatigue life of aluminium alloys under cyclic loading.] Question: What is the recommended recycling process for end-of-life electric motor magnets?"
+  },
+  {
+    "role": "assistant",
+    "content": "I do not have enough information in the provided documents to answer this, but based on general knowledge: end-of-life NdFeB magnets from electric motors are typically recycled through hydrometallurgical or pyrometallurgical processes to recover rare earth elements such as neodymium and dysprosium, which are then reused in new magnet production."
   }
 ]

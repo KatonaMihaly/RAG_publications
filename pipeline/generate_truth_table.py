@@ -49,9 +49,13 @@ CHUNKED_PAPERS_TPATH = _param("CHUNKED_PAPERS_TPATH")
 EVAL_TABLE           = _param("EVAL_TABLE")
 NUM_EVALS            = int(_param("NUM_EVALS", "20"))
 
-_PROMPTS_DIR = Path(__file__).parent / "prompts"
-AGENT_DESCRIPTION   = (_PROMPTS_DIR / "agent_description.md").read_text().strip()
-QUESTION_GUIDELINES = (_PROMPTS_DIR / "question_guidelines.md").read_text().strip()
+try:
+    _PROMPTS_DIR        = Path(__file__).parent / "prompts"
+    AGENT_DESCRIPTION   = (_PROMPTS_DIR / "agent_description.md").read_text().strip()
+    QUESTION_GUIDELINES = (_PROMPTS_DIR / "question_guidelines.md").read_text().strip()
+except (NameError, FileNotFoundError):
+    AGENT_DESCRIPTION   = _param("AGENT_DESCRIPTION")
+    QUESTION_GUIDELINES = _param("QUESTION_GUIDELINES")
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +176,7 @@ def write_truth_table(w: WorkspaceClient, warehouse_id: str, records: list[dict]
 
     # 2. Batch INSERT all rows in a single statement
     def _esc(s: str) -> str:
-        return s.replace("'", "''")
+        return s.replace("\\", "\\\\").replace("'", "''")
 
     values = ",\n    ".join(
         f"('{_esc(json.dumps(r['inputs']))}', '{_esc(json.dumps(r['expectations']))}')"

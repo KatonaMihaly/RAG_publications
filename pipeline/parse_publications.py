@@ -1,7 +1,11 @@
 """
-Bronze layer: parse PDFs from Unity Catalog Volume into a structured Delta table using ai_parse_document.
+Bronze layer: parse PDFs from Unity Catalog Volume into a structured Delta table.
 
-Runs the SQL remotely on a Databricks SQL warehouse via the Statement Execution API.
+New files are ingested via Auto Loader (cloudFiles) with trigger(availableNow=True),
+so ai_parse_document is only called on files not yet in the checkpoint — if nothing
+changed, the stream exits immediately without modifying the table.
+
+Deleted files are removed with a SQL DELETE after the stream completes.
 
 Credentials are read automatically from ~/.databrickscfg.
 """
@@ -12,6 +16,7 @@ try:
     from dotenv import load_dotenv
 except ImportError:
     load_dotenv = lambda: None  # noqa: E731
+from pyspark.sql.functions import expr  # noqa: F821 - spark available on Databricks
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementState
 
@@ -26,32 +31,15 @@ def _param(key: str) -> str:
         return os.environ[key]
 
 
-VOLUME_PATH = _param("RAW_PAPERS_VPATH")
-TARGET_TABLE = _param("PARSED_PAPERS_TPATH")
-
-sql_create_table = f"""
-CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
-    path            STRING,
-    parsed_output   VARIANT,
-    modificationTime TIMESTAMP
-) USING DELTA
-"""
+VOLUME_PATH     = _param("RAW_PAPERS_VPATH")
+TARGET_TABLE    = _param("PARSED_PAPERS_TPATH")
+CHECKPOINT_PATH = _param("PARSE_CHECKPOINT_VPATH")
 
 sql_delete_removed = f"""
 DELETE FROM {TARGET_TABLE}
 WHERE path NOT IN (
     SELECT path FROM READ_FILES('{VOLUME_PATH}', format => 'binaryFile')
 )
-"""
-
-sql_insert_new = f"""
-INSERT INTO {TARGET_TABLE}
-SELECT
-    path,
-    ai_parse_document(content, map('version', '2.0')) AS parsed_output,
-    modificationTime
-FROM READ_FILES('{VOLUME_PATH}', format => 'binaryFile')
-WHERE path NOT IN (SELECT path FROM {TARGET_TABLE})
 """
 
 
@@ -87,18 +75,32 @@ def _run_sql(w: WorkspaceClient, warehouse_id: str, sql: str, label: str) -> Non
 
 
 def parse_publications() -> None:
+    # Step 1: Stream new PDFs — Auto Loader only processes files not in the checkpoint
+    print(f"Step 1/2: Streaming new PDFs from '{VOLUME_PATH}' into '{TARGET_TABLE}'...")
+    (spark  # noqa: F821 - injected by Databricks runtime
+        .readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "binaryFile")
+        .load(VOLUME_PATH)
+        .select(
+            "path",
+            expr("ai_parse_document(content, map('version', '2.0'))").alias("parsed_output"),
+            "modificationTime",
+        )
+        .writeStream
+        .format("delta")
+        .option("checkpointLocation", CHECKPOINT_PATH)
+        .outputMode("append")
+        .trigger(availableNow=True)
+        .toTable(TARGET_TABLE)
+        .awaitTermination()
+    )
+
+    # Step 2: Remove rows for PDFs deleted from the volume
+    print(f"Step 2/2: Removing rows for deleted PDFs...")
     w = WorkspaceClient()
     warehouse_id = _get_warehouse_id(w)
-    print(f"Using warehouse {warehouse_id}")
-
-    print(f"Step 1/3: Ensuring table '{TARGET_TABLE}' exists...")
-    _run_sql(w, warehouse_id, sql_create_table, "Create table")
-
-    print(f"Step 2/3: Removing rows for deleted PDFs...")
     _run_sql(w, warehouse_id, sql_delete_removed, "Delete removed")
-
-    print(f"Step 3/3: Inserting new PDFs from '{VOLUME_PATH}'...")
-    _run_sql(w, warehouse_id, sql_insert_new, "Insert new")
     print(f"Done. Table '{TARGET_TABLE}' is up to date.")
 
 
