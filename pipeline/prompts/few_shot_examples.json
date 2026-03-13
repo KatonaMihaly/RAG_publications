@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "content": "Context: [Skewing reduces Cogging Torque by 15%] Question: How to fix cogging?"
+  },
+  {
+    "role": "assistant",
+    "content": "Thinking: Context mentions skewing as a solution.\nAnswer: According to the documents, skewing can reduce cogging torque by 15%."
+  }
+]
