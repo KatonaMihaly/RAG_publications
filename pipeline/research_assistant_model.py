@@ -52,7 +52,7 @@ class ResearchAssistantModel(mlflow.pyfunc.PythonModel):
     def _retrieve(self, question: str) -> list:
         results = self.index.similarity_search(
             query_text=question,
-            columns=["chunk_text", "path"],
+            columns=["chunk_text_string", "path"],
             num_results=self.num_results,
             query_type="hybrid",
         )

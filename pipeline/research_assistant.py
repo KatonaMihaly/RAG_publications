@@ -28,7 +28,7 @@ FEW_SHOT_EXAMPLES = json.loads((_PROMPTS_DIR / "few_shot_examples.json").read_te
 def retrieve(index, question: str) -> list:
     results = index.similarity_search(
         query_text=question,
-        columns=["chunk_text", "path"],
+        columns=["chunk_text_string", "path"],
         num_results=NUM_RESULTS,
         query_type="hybrid",
     )

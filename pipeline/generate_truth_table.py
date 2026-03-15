@@ -103,9 +103,9 @@ def fetch_chunks(w: WorkspaceClient, warehouse_id: str) -> pd.DataFrame:
     generator (same pre-processing as the notebook).
     """
     rows = _run_sql(w, warehouse_id, f"""
-        SELECT chunk_id, chunk_text
+        SELECT chunk_id, chunk_text_string
         FROM   {CHUNKED_PAPERS_TPATH}
-        WHERE  chunk_text IS NOT NULL
+        WHERE  chunk_text_string IS NOT NULL
     """, "fetch_chunks")
 
     df = pd.DataFrame(rows, columns=["doc_uri", "content"])
@@ -130,6 +130,10 @@ def _extract_query(inputs_val) -> str:
     """Extract the user question from the inputs dict/string returned by generate_evals_df."""
     if isinstance(inputs_val, str):
         inputs_val = json.loads(inputs_val)
+    # New databricks-agents format: {"question": "..."}
+    if "question" in inputs_val:
+        return inputs_val["question"]
+    # Legacy format: {"messages": [{"role": "user", "content": "..."}]}
     messages = inputs_val.get("messages", [])
     for msg in messages:
         if msg.get("role") == "user":
@@ -144,10 +148,17 @@ def convert(raw_df: pd.DataFrame) -> list[dict]:
         inputs       = {"query": "<question>"}
         expectations = {"expected_facts": [...], "expected_retrieved_context": [...]}
     """
+    if raw_df.empty:
+        print("  WARNING: generate_evals_df returned an empty DataFrame.")
+        return []
+    print(f"  raw_df columns: {list(raw_df.columns)}")
+    print(f"  raw_df sample inputs[0]: {raw_df.iloc[0].get('inputs', '<missing>')}")
+
     records = []
     for _, row in raw_df.iterrows():
         query = _extract_query(row["inputs"])
         if not query:
+            print(f"  WARNING: could not extract query from inputs: {row['inputs']}")
             continue
         expectations = row.get("expectations", {})
         if isinstance(expectations, str):
@@ -175,6 +186,9 @@ def write_truth_table(w: WorkspaceClient, warehouse_id: str, records: list[dict]
     """, "create_table")
 
     # 2. Batch INSERT all rows in a single statement
+    if not records:
+        raise RuntimeError("No eval records were generated — cannot write an empty truth table.")
+
     def _esc(s: str) -> str:
         return s.replace("\\", "\\\\").replace("'", "''")
 

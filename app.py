@@ -16,9 +16,14 @@ HEADERS = {"Authorization": f"Bearer {cfg.token}", "Content-Type": "application/
 
 
 def query_endpoint(messages: list) -> dict:
-    response = requests.post(ENDPOINT_URL, headers=HEADERS, json={"messages": messages})
-    response.raise_for_status()
-    return response.json()
+    response = requests.post(
+        ENDPOINT_URL,
+        headers=HEADERS,
+        json={"inputs": {"messages": messages}},
+    )
+    if not response.ok:
+        raise ValueError(f"Endpoint error {response.status_code}: {response.text}")
+    return response.json()["predictions"]
 
 
 st.title("Research Assistant")

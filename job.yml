@@ -16,7 +16,7 @@ job:
     VECTOR_SEARCH_ENDPOINT: academic_search_endpoint
     VECTOR_SEARCH_INDEX:    workspace.default.publication_index
     EMBEDDING_MODEL:        databricks-gte-large-en
-    EMBEDDING_COLUMN:       chunk_text
+    EMBEDDING_COLUMN:       chunk_text_string
     PRIMARY_KEY:            chunk_id
     LLM_ENDPOINT:           databricks-meta-llama-3-3-70b-instruct
     NUM_RESULTS:            "15"

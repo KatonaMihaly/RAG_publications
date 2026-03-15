@@ -8,7 +8,9 @@ from pathlib import Path
 
 import mlflow
 import mlflow.pyfunc
+from mlflow.models.signature import infer_signature
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors.platform import ResourceDoesNotExist
 from databricks.sdk.service.serving import (
     AiGatewayUsageTrackingConfig,
     EndpointCoreConfigInput,
@@ -38,6 +40,13 @@ def log_and_register_model() -> str:
         DatabricksServingEndpoint(endpoint_name=LLM_ENDPOINT),
     ]
 
+    input_example  = {"messages": [{"role": "user", "content": "What is the Taguchi method?"}]}
+    output_example = {
+        "answer": "The Taguchi method is a robust design technique...",
+        "chunks": [{"text": "Sample chunk text.", "path": "/Volumes/workspace/default/publications/paper.pdf"}],
+    }
+    signature = infer_signature(input_example, output_example)
+
     with mlflow.start_run():
         model_info = mlflow.pyfunc.log_model(
             artifact_path="research_assistant",
@@ -45,7 +54,8 @@ def log_and_register_model() -> str:
             artifacts={"prompts_dir": str(Path(__file__).parent / "prompts")},
             registered_model_name=REGISTERED_MODEL_NAME,
             resources=resources,
-            input_example={"messages": [{"role": "user", "content": "What is the Taguchi method?"}]},
+            signature=signature,
+            input_example=input_example,
         )
 
     version = model_info.registered_model_version
@@ -72,10 +82,17 @@ def deploy_endpoint(model_version: str) -> None:
 
     if SERVING_ENDPOINT_NAME in existing:
         print(f"  Endpoint '{SERVING_ENDPOINT_NAME}' exists — updating...")
-        w.serving_endpoints.update_config_and_wait(
-            name=SERVING_ENDPOINT_NAME,
-            served_entities=[served_entity],
-        )
+        try:
+            w.serving_endpoints.update_config_and_wait(
+                name=SERVING_ENDPOINT_NAME,
+                served_entities=[served_entity],
+            )
+        except ResourceDoesNotExist:
+            print(f"  Endpoint disappeared (stale listing) — creating instead...")
+            w.serving_endpoints.create_and_wait(
+                name=SERVING_ENDPOINT_NAME,
+                config=EndpointCoreConfigInput(name=SERVING_ENDPOINT_NAME, served_entities=[served_entity]),
+            )
     else:
         print(f"  Creating endpoint '{SERVING_ENDPOINT_NAME}'...")
         w.serving_endpoints.create_and_wait(

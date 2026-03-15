@@ -37,10 +37,10 @@ CHECKPOINT_PATH      = _param("CHUNK_CHECKPOINT_VPATH")
 
 sql_create_table = f"""
 CREATE TABLE IF NOT EXISTS {CHUNKED_PAPERS_TPATH} (
-    path       STRING,
-    chunk_id   STRING,
-    chunk_text STRING,
-    chunk_type STRING
+    path              STRING,
+    chunk_id          STRING,
+    chunk_text_string STRING,
+    chunk_type        STRING
 ) USING DELTA
 TBLPROPERTIES (delta.enableChangeDataFeed = true)
 """
@@ -93,7 +93,7 @@ def _process_batch(batch_df, batch_id):
         SELECT
             path,
             uuid()                          AS chunk_id,
-            exploded.value:content::string  AS chunk_text,
+            exploded.value:content::string  AS chunk_text_string,
             exploded.value:type::string     AS chunk_type
         FROM _new_parsed,
         LATERAL VARIANT_EXPLODE(parsed_output:document.elements) AS exploded(pos, key, value)
