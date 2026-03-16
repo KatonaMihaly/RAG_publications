@@ -132,7 +132,7 @@ def _init_clients() -> None:
 def _retrieve(question: str) -> list:
     results = _index.similarity_search(
         query_text=question,
-        columns=["chunk_text", "path"],
+        columns=["chunk_text_string", "path"],
         num_results=NUM_RESULTS,
         query_type="hybrid",
     )

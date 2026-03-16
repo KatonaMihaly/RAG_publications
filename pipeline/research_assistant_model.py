@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 import mlflow
+import pandas as pd
 
 
 class ResearchAssistantModel(mlflow.pyfunc.PythonModel):
@@ -32,11 +33,21 @@ class ResearchAssistantModel(mlflow.pyfunc.PythonModel):
 
     def predict(self, context, model_input, params=None):
         """Accepts {"messages": [...]} or {"question": "..."}."""
-        if isinstance(model_input, dict):
-            messages = model_input.get("messages", [])
+        if isinstance(model_input, pd.DataFrame):
+            row = model_input.to_dict("records")[0]
+            _msgs = row.get("messages")
+            messages = list(_msgs) if _msgs is not None else []
             question = (
                 next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-                if messages
+                if len(messages) > 0
+                else row.get("question", "")
+            )
+        elif isinstance(model_input, dict):
+            _msgs = model_input.get("messages")
+            messages = list(_msgs) if _msgs is not None else []
+            question = (
+                next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+                if len(messages) > 0
                 else model_input.get("question", "")
             )
         else:

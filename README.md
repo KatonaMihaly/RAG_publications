@@ -1,56 +1,142 @@
 
-# Retrieval-Augmented Generation - a Research Assistant
+# RAG Research Assistant
 
-## 📖 Overview
-This project is a **Retrieval-Augmented Generation (RAG)** application built on the **Databricks Data Intelligence Platform**.
+A **Retrieval-Augmented Generation (RAG)** application built on the **Databricks Data Intelligence Platform** that lets me query my own academic publications in natural language.
 
-I developed this tool to assist in writing my research. I came to the conclusion while writing my dissertation that over the past 5 years, I have accumulated and red numerous research papers, and recalling specific details across all of them became challenging. This AI assistant allows me to:
-* **Summarize** answers to complex technical questions based *strictly* on my own open-access publications.
-* **Locate** the exact source material by providing file paths and context chunks.
-* **Validate** memories without manually re-reading hundreds of pages.
+I built this tool to solve a real problem: after years of research I had accumulated hundreds of pages across dozens of papers, and recalling specific details became impractical. This assistant lets me:
 
-This project also serves as a practical implementation of concepts learned through the **Databricks Academy**.
+- **Ask** complex technical questions and get grounded, cited answers
+- **Locate** exact source material with file paths and verbatim context chunks
+- **Validate** memory without re-reading entire papers
 
 ---
 
-## Technical Architecture
-The pipeline follows the **Medallion Architecture** pattern to transform unstructured PDF data into a queryable knowledge base.
+## Architecture
 
-### 1. Ingestion & Parsing (Bronze Layer)
-* **Source:** Open-access PDF publications stored in **Unity Catalog Volumes**.
-* **Tool:** `ai_parse_document` (Databricks Intelligence).
-* **Process:** Utilizes the "Nano Banana" model (via the parse function) to convert unstructured PDFs into a structured "Variant" format, extracting text, layout, and metadata.
+The pipeline follows the **Medallion Architecture**, transforming raw PDFs into a queryable knowledge base entirely within Databricks — no external databases or local inference.
 
-### 2. Transformation & Chunking (Silver Layer)
-* **Logic:** Uses **PySpark** to explode the parsed document structure into smaller, semantically meaningful chunks.
-* **Cleaning:** Filters out NULL values and noise (chunks < 50 characters) to ensure high-quality embeddings.
-* **Output:** A clean Delta Table ready for vectorization.
-
-### 3. Vector Search & Indexing
-* **Embedding Model:** `databricks-gte-large-en` (1024 dimensions).
-* **Database:** **Mosaic AI Vector Search**.
-* **Sync Mode:** Triggered sync with **Change Data Feed (CDF)** enabled for efficient, incremental updates.
-
-### 4. Retrieval & Generation (The "Brain")
-* **LLM:** **Llama 3 70B Instruct** (hosted via Model Serving).
-* **Retrieval Strategy:** **Hybrid Search** (Keyword + Semantic Vectors). This is crucial for capturing specific technical acronyms (e.g., "PMSM") that pure vector search might miss.
-* **Prompt Engineering:** Implemented **Chain-of-Thought (CoT)** and **Few-Shot Prompting** to strictly ground the model in the provided context and reduce hallucinations.
-
----
-
-## Evaluation & Testing
-To ensure the system provides accurate data, I implemented a robust evaluation pipeline using **MLflow**:
-
-1.  **Synthetic Truth Table:** Used `databricks-agents` to generate a synthetic dataset of Questions, Answers, and Ground Truths derived directly from the source papers.
-2.  **LLM-as-a-Judge:** Automated evaluation using MLflow's GenAI metrics:
-    * **Correctness:** Is the answer factually accurate based on the documents?
-    * **Relevance:** Did the bot answer the user's specific question?
----
-
-## Usage
-The core functionality is wrapped in a Python function `research_assistant(question)`.
-
-**Example:**
 ```
-df_result = research_assistant("In which application is asymmetric rotor topology advantageous?")
+publications/*.pdf  (Unity Catalog Volume)
+        │
+        ▼  ai_parse_document()
+    parsed_papers          ← Bronze: structured Variant JSON per PDF
+        │
+        ▼  PySpark explode + filter
+    chunked_papers         ← Silver: one row per chunk, CDF-enabled Delta table
+        │
+        ▼  Mosaic AI Vector Search  (databricks-gte-large-en, 1024-dim)
+    publication_index      ← Hybrid search index (semantic + keyword)
+        │
+        ▼  Llama 3.3 70B Instruct  (Databricks Model Serving)
+    research_assistant     ← MLflow pyfunc model, registered in Unity Catalog
+        │
+        ▼  REST endpoint
+    Streamlit app          ← Chat UI with cited sources
 ```
+
+### Tech stack
+
+| Layer | Technology |
+|---|---|
+| Compute & Storage | Databricks + Unity Catalog |
+| PDF Parsing | `ai_parse_document` (Databricks AI Functions) |
+| Chunking | PySpark structured streaming + CDF |
+| Embeddings | `databricks-gte-large-en` (1024 dimensions) |
+| Vector Search | Mosaic AI Vector Search — hybrid (semantic + keyword) |
+| LLM | Llama 3.3 70B Instruct via Databricks Model Serving |
+| Model Registry | MLflow + Unity Catalog (`models-from-code`) |
+| Evaluation | `mlflow.genai.evaluate` — Correctness + RelevanceToQuery |
+| Orchestration | Databricks Jobs (nightly, Quartz cron) |
+| UI | Streamlit |
+
+---
+
+## Pipeline details
+
+### 1. Ingestion & Parsing (Bronze)
+
+PDFs are stored in a Unity Catalog Volume and parsed using `ai_parse_document`, which extracts structured text, layout, and metadata into a Variant-typed Delta table. A PySpark streaming job processes only new or changed files via checkpoint directories.
+
+### 2. Chunking (Silver)
+
+A second streaming job explodes each parsed document into individual chunks using `variant_explode`. Chunks shorter than 150 characters are filtered out. Change Data Feed (CDF) is enabled on the output table so the Vector Search index can sync incrementally.
+
+### 3. Vector Indexing
+
+Mosaic AI Vector Search auto-embeds `chunk_text_string` using `databricks-gte-large-en` (1024 dimensions). The index uses **triggered sync** with CDF, so only new/updated chunks are re-embedded on each run.
+
+**Retrieval strategy: hybrid search** — combining dense vector similarity with BM25 keyword matching. This is critical for technical vocabulary (acronyms like "PMSM", "NdFeB") that pure semantic search can miss.
+
+### 4. Generation
+
+Llama 3.3 70B Instruct receives a context window built from the top-15 retrieved chunks. The prompt uses:
+- **Chain-of-Thought (CoT)** reasoning to ground answers in the provided context
+- **Few-Shot examples** to model the expected response style
+- An explicit instruction to say "I don't have enough information" when the context doesn't support an answer — reducing hallucination
+
+### 5. Model Serving
+
+The RAG chain is packaged as an MLflow `PythonModel` using the **models-from-code** approach and registered in Unity Catalog. A Databricks Model Serving endpoint exposes it as a REST API with AI Gateway usage tracking enabled.
+
+### 6. Evaluation
+
+A synthetic truth table of 20 question/answer/ground-truth pairs is generated from the source documents using `databricks-agents`. Each pipeline run evaluates the RAG system against this table using:
+- **Correctness** — factual accuracy relative to ground truth
+- **RelevanceToQuery** — whether retrieved context actually answers the question
+
+Results are logged to an MLflow experiment for tracking over time.
+
+---
+
+## Nightly job
+
+All pipeline stages run as a scheduled Databricks job (`rag_nightly_update`, daily at 01:00 UTC) with a 3-hour timeout. The task DAG is:
+
+```
+parse_publications
+        │
+chunk_publications
+       ├────────────────────────────┐
+create_vector_index    generate_truth_table
+       └────────────────────────────┘
+                   │
+             evaluate_rag
+```
+
+`create_vector_index` and `generate_truth_table` run in parallel after chunking completes.
+
+---
+
+## Streamlit UI
+
+The chat interface sends the full conversation history to the serving endpoint on each turn, enabling multi-turn dialogue. Each response includes a collapsible **Sources** panel showing the retrieved chunks and their source file paths.
+
+![Chat UI showing an answer with cited source chunks](docs/screenshot.png)
+
+---
+
+## Repository structure
+
+```
+.
+├── .env                             # Local configuration
+├── job.yml                          # Job definition (schedule, tasks, parameters)
+├── deploy_job.py                    # Deploys/updates the Databricks job
+├── app.py                           # Streamlit chat UI
+├── pipeline/
+│   ├── parse_publications.py        # Bronze ingestion
+│   ├── chunk_publications.py        # Silver chunking
+│   ├── create_vector_index.py       # Vector index sync
+│   ├── generate_truth_table.py      # Synthetic evaluation dataset
+│   ├── evaluate_rag.py              # MLflow evaluation
+│   ├── research_assistant.py        # Standalone RAG function
+│   ├── research_assistant_model.py  # MLflow PythonModel
+│   ├── deploy_serving_endpoint.py   # Model registration + endpoint deployment
+│   └── prompts/                     # System prompt, few-shot examples, agent config
+```
+
+---
+
+## Setup
+
+See [CLAUDE.md](CLAUDE.md) for the full step-by-step setup guide, including Databricks prerequisites, first-run instructions, and known pitfalls.

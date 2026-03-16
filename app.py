@@ -20,6 +20,7 @@ def query_endpoint(messages: list) -> dict:
         ENDPOINT_URL,
         headers=HEADERS,
         json={"inputs": {"messages": messages}},
+        timeout=300,
     )
     if not response.ok:
         raise ValueError(f"Endpoint error {response.status_code}: {response.text}")
@@ -63,7 +64,7 @@ if prompt := st.chat_input("Ask a question about the publications..."):
                 for i, chunk in enumerate(chunks, 1):
                     filename = PurePosixPath(chunk["path"]).name
                     st.markdown(f"**[{i}] {filename}**")
-                    st.caption(chunk["text"][:300].strip())
+                    st.caption(chunk["text"].strip())
                     st.divider()
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
